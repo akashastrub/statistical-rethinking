@@ -1,0 +1,70 @@
+--- 
+title: "Week 1 Problem Sheet" 
+author: "Akasha Strub"
+date: "20 June 2023"
+output: html_document 
+---
+
+## Import libraries
+
+```{r, message = FALSE}
+# Import libraries
+library(rethinking)
+library(dplyr)
+library(ggplot2)
+```
+
+## Problem 1: Suppose the globe tossing data (Lecture 2, Chapter 2) had turned out to be 4 water and 11 land. Construct the posterior distribution.
+
+```{r}
+# Instantiate parameter as a grid
+p_grid <- seq(from = 0, to = 1, length.out = 100)
+
+# Define prior as uniform
+prior <- rep(1, 100)
+
+# Count number of ways data could have come about for each value of p_grid
+# N.B. this could have been derived from first principles (garden of forking data)
+# but in this case binomial distribution was used.
+likelihood <- dbinom(4, size = 15, prob = p_grid)
+
+# Compute unstandardised posterior (product of prior and likelihood)
+unstd_posterior <- prior * likelihood
+
+# Compute standardised posterior
+posterior <- unstd_posterior / sum(unstd_posterior)
+
+# Plot posterior
+df <- data.frame(p_grid, posterior)
+ggplot(data = df) + 
+  geom_line(aes(x = p_grid, y = posterior)) +
+  labs(title = "Posterior distribution",
+       x = "Proportion of globe covered in water",
+       y = "Density")
+```
+
+## Problem 2: Using the posterior distribution from 1, compute the posterior predictive distribution for the next 5 tosses of the same globe. I recommend you use the sampling method.
+
+```{r}
+# Sample 100 parameter values from posterior
+post_samples <- sample(p_grid, size = 100, replace = TRUE, prob = posterior)
+
+# For each posterior sample, use the binomial to create an observation
+obs_samples <- rbinom(n = 1000, size = 5, prob = post_samples)
+
+# Plot histogram
+ggplot() + 
+  geom_histogram(aes(obs_samples), binwidth = 0.5) +
+  labs(title = "Posterior predictive distribution",
+       x = "Number of 'W' throws in next 5 tosses",
+       y = "Count")
+```
+
+## Problen 3: Use the posterior predictive distribution from 2 to calculate the probability of 3 or more water samples in the next 5 tosses.
+
+```{r}
+# Find proportion of predictive samples that result in 3 or more water tosses in next 5 tosses:
+100 * sum(obs_samples >= 3) / length(obs_samples)
+
+# Around 18.9% (depends on specific samples!)
+```
