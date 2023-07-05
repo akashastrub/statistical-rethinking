@@ -1,0 +1,307 @@
+--- 
+title: "Week 2 Problem Sheet" 
+author: "Akasha Strub"
+date: "05 July 2023"
+output: html_document 
+---
+
+## Import libraries
+
+```{r, message = FALSE}
+# Import libraries
+library(rethinking)
+library(dplyr)
+library(ggplot2)
+library(dagitty)
+
+# Set seed
+set.seed(0507)
+```
+
+## Problem 1
+### Part 1
+
+From the Howell1 dataset, consider only the people younger than 13 years old. 
+Assume that age influences weight through two paths. 
+First, age influences height, and height influences weight. 
+Second, age directly influences weight through age related changes in muscle growth and body proportions.
+Draw the DAG that represents these causal relationships. 
+
+```{r}
+# Draw DAG
+dag <- dagitty( "dag {
+Age -> Height
+Height -> Weight
+Age -> Weight
+}")
+
+coordinates(dag) <- list(
+  x = c(Age = 0, Height = 2, Weight = 1) , 
+  y = c(Age = 0, Height = 0, Weight = 1))
+
+drawdag(dag)
+```
+
+### Part 2
+
+Write a generative simulation that takes age as an input and simulates height and
+weight, obeying the relationships in the DAG.
+
+```{r}
+# Import Howell1 dataset
+data(Howell1)
+
+# Filter to people younger than 13
+df <- Howell1 %>% 
+  filter(age < 13)
+
+# Standardize data
+df1 <- df %>% 
+  mutate(age_std = standardize(age),
+         weight_std = standardize(weight),
+         height_std = standardize(height))
+
+# Find association between age and height to generate height as function of age
+model1a <- quap(
+  alist(
+    height_std ~ dnorm(mu, sigma),
+    mu <- a + b*age_std,
+    a ~ dnorm( 0 , 1 ),
+    b ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df1)
+
+# These posterior distribution estimates will be used for the generative model
+# to generate height from age
+precis(model1a)
+
+# Find association between weight and age & height to generate weight as a function of age and height
+model1b <- quap(
+  alist(
+    weight_std ~ dnorm(mu, sigma),
+    mu <- a + b_age*age_std + b_height*height_std,
+    a ~ dnorm( 0 , 1 ),
+    b_age ~ dnorm( 0 , 1 ),
+    b_height ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df1)
+
+# These posterior distribution estimates will be used for the generative model
+# to generate weight from age and height
+precis(model1b)
+
+# Instantiate range of age values
+age_std1 <- seq(-2, 2, length.out = 100)
+
+# Model height as as function of age
+height_std1 <- rnorm(0 + 0.92 * age_std1, 0.39)
+
+# Model weight as a function of age and height
+weight_std1 <- rnorm(0 + 0.07 * age_std1 + 0.90 * height_std1, 0.26)
+```
+### Part 3 
+
+Estimate the causal association between age and weight.
+
+```{r}
+# For the direct causal association, height should be included to find the direct effect 
+# of age on weight, for a fixed height. A multivariate regression is to be run (Gaussian 
+# approximation of posterior will be used, as opposed to grid/MCMC)
+
+# Create model for weight as a function on age
+model2 <- quap(
+  alist(
+    weight_std ~ dnorm(mu, sigma),
+    mu <- a + b_age*age_std + b_height*height_std,
+    a ~ dnorm( 0 , 1 ),
+    b_age ~ dnorm( 0 , 1 ),
+    b_height ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df1)
+
+# Investigate validity of priors via prior predictive simulation
+# Method 1 - plot relationships as lines for weight vs age and weight vs height
+n_priors2 <- 100
+prior_samples2a <- extract.prior(model2, n = n_priors2) %>%
+  as.data.frame() %>%
+  mutate(line = row_number())
+
+df_plot2a <- expand.grid(line = seq(1:n_priors2),
+                        age_std = seq(-2, 2)) %>%
+  left_join(prior_samples2a, by = "line") %>%
+  mutate(weight_std = a + b_age*age_std) %>%
+  arrange(line, age_std)
+
+# Plot
+ggplot(data = df_plot2a, aes(x = age_std, y = weight_std, group = line)) +
+  geom_line(alpha = 0.5) +
+  labs(title = "Potential relationships between weight and age CONDITIONAL on height (from prior)")
+
+df_plot2b <- expand.grid(line = seq(1:n_priors2),
+                        height_std = seq(-2, 2)) %>%
+  left_join(prior_samples2a, by = "line") %>%
+  mutate(weight_std = a + b_height*height_std) %>%
+  arrange(line, height_std)
+
+# Plot
+ggplot(data = df_plot2b, aes(x = height_std, y = weight_std, group = line)) +
+  geom_line(alpha = 0.5) +
+  labs(title = "Potential relationships between weight and height CONDITIONAL on age (from prior)")
+
+# An additional prior predictive method for the multivariate regression use case 
+# could be to simulate predictions from prior distributions and compare to raw data
+# (this is less relevant for prior distributions as the points would be all over the place. 
+# It is much more relevant for posterior distributions to evaluate model fit)
+
+# See marginal posterior distributions
+precis(model2)
+
+# b_age is close to 0 and overlaps heavily with 0. Therefore CONDITIONAL on height,
+# can can conclude that the DIRECT causal effect of age on height is minimal.
+# This makes sense intuitively. If a child grows older but does not grow in height, 
+# we would estimate that their weight would remain somewhat constant.
+# And therefore that the direct causal effect be small. 
+# The mean of 0.07 SD results in 0.1kg/year... "clinically insignificant" regardless
+ggplot() + 
+  geom_freqpoly(aes(x = extract.samples(model2, n = 10000)$b_age), stat = "bin") +
+  geom_vline(aes(xintercept = 0), colour = "red") +
+  labs(x = "b_age value",
+       y = "freq",
+       title = "Posterior distribution for b_age")
+```
+
+## Problem 2
+
+Use a linear regression to estimate the total causal effect of each year of
+growth on weight.
+
+```{r}
+# For the total causal association, Height should be ignored and a simple bivariate 
+# regression is to be run (Gaussian approximation of posterior will be used, 
+# as opposed to grid/MCMC)
+
+# Create model for weight as a function on age
+model3 <- quap(
+  alist(
+    weight_std ~ dnorm(mu, sigma),
+    mu <- a + b*age_std,
+    a ~ dnorm( 0 , 1 ),
+    b ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df1)
+
+# Investigate validity of priors via prior predictive simulation
+n_priors3 <- 100
+prior_samples3 <- extract.prior(model3, n = n_priors3) %>% 
+  as.data.frame() %>% 
+  mutate(line = row_number())
+
+df_plot3 <- expand.grid(line = seq(1:n_priors3),
+                       age_std = seq(-2, 2), 
+                       weight_std = NA) %>% 
+  left_join(prior_samples3, by = "line") %>% 
+  mutate(weight_std = a + b*age_std) %>% 
+  arrange(line, age_std)
+
+# Plot
+ggplot(data = df_plot3, aes(x = age_std, y = weight_std, group = line)) + 
+  geom_line(alpha = 0.5)
+
+# See marginal posterior distributions
+precis(model3)
+
+# For every 1 SD increase in age (3.8 years), there is ~ 0.9 SD increase in weight (5.1kg). 
+# The positive relationship is expected. Unstandardised, this results to ~ 1.34 kg per year
+# df$age %>% sd()
+# df$weight %>% sd()
+
+```
+
+## Problem 3
+
+Now suppose the causal association between age and weight might be different for boys and girls. 
+Use a single linear regression, with a categorical variable for sex, to estimate the total causal effect of age on weight separately for boys and girls. 
+How do girls and boys differ? Provide one or more posterior contrasts as a summary.
+
+
+```{r}
+# For the total causal association, Height should again be ignored and a simple bivariate 
+# regression is to be run. In this case, the parameter b should be specific to 
+# the sex via an index variable (not dummy for various reasons...)
+
+# Modify data for model
+df2 <- df1 %>% 
+  mutate(sex = case_when(male == 0 ~ 1,
+                         male == 1 ~ 2))
+         
+# Create model for weight as a function on age
+model4 <- quap(
+  alist(
+    weight_std ~ dnorm(mu, sigma),
+    mu <- a[sex] + b[sex]*age_std,
+    a[sex] ~ dnorm( 0 , 1 ),
+    b[sex] ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df2)
+
+# Prior predictive simulation is redundant as it is the same as above - just for
+# each gender individually this time around.
+
+# See marginal posterior distributions
+precis(model4, depth = 2)
+
+# There seems to be a difference between male and female after all. Instead of
+# only assessing MARGINAL distributions to quantify this, the best is to sample from 
+# each posterior distribution and subtract to obtain a contrasts
+
+# Create contrast distribution
+posterior_contrast <- extract.samples(model4) %>% 
+  as.data.frame() %>% 
+  # Summarise as men coef - women coef for positive values (more intuitive)
+  reframe(b_diff = b.2 - b.1)
+
+# Plot contrast distribution between parameterss
+ggplot() + 
+  geom_freqpoly(aes(x = posterior_contrast$b_diff)) +
+  geom_vline(aes(xintercept = 0), colour = "red") +
+  labs(x = "b_male - b_female value",
+       y = "freq",
+       title = "Posterior distribution for difference in b values between M and F")
+
+# Plot age vs weight lines
+n_samples4 <- 1000
+post_samples4 <- extract.samples(model4, n = n_samples4) %>% 
+  as.data.frame() %>% 
+  mutate(sample = row_number())
+
+df_plot3 <- expand.grid(sex = c(1, 2),
+                        age_std = seq(-1.41225, 1.725287),
+                        sample = seq(1:n_samples4)) %>% 
+  left_join(post_samples4, by = "sample") %>% 
+  mutate(mean_weight_std = case_when(sex == 1 ~ a.1 + b.1*age_std,
+                                     sex == 2 ~ a.2 + b.2*age_std)) %>%
+  group_by(age_std, sex) %>% 
+  reframe(mean_weight = mean(mean_weight_std),
+          # Computing percentile intervals is just a matter of finding 5.5 and 94.5 
+          # percentiles and then subtracting - rethinking package can do such simple
+          # calculations on our behalf
+          mean_weight_lower = PI(mean_weight_std)[1],
+          mean_weight_upper = PI(mean_weight_std)[2]) %>% 
+  arrange(age_std)
+
+# Modify values back to real units
+df_plot4 <- df_plot3 %>% 
+  mutate(age = (age_std * df2$age %>% sd()) + df2$age %>% mean(),
+         across(contains("weight"), ~ .x * df2$weight %>% sd()) + df2$weight %>% mean())
+
+# Plot contrast over age range
+ggplot(data = df_plot4, aes(x = age, y = mean_weight, group = sex)) +
+  geom_line(aes(colour = factor(sex))) +
+  geom_ribbon(aes(ymin = mean_weight_lower, ymax = mean_weight_upper, fill = factor(sex)), alpha = 0.2) +
+  labs(title = "Non-standardised weight vs age for M vs F")
+```

@@ -14,7 +14,9 @@ library(dplyr)
 library(ggplot2)
 ```
 
-## Problem 1: Suppose the globe tossing data (Lecture 2, Chapter 2) had turned out to be 4 water and 11 land. Construct the posterior distribution.
+## Problem 1
+
+Suppose the globe tossing data (Lecture 2, Chapter 2) had turned out to be 4 water and 11 land. Construct the posterior distribution.
 
 ```{r}
 # Instantiate parameter as a grid
@@ -43,7 +45,9 @@ ggplot(data = df) +
        y = "Density")
 ```
 
-## Problem 2: Using the posterior distribution from 1, compute the posterior predictive distribution for the next 5 tosses of the same globe. I recommend you use the sampling method.
+## Problem 2
+
+Using the posterior distribution from 1, compute the posterior predictive distribution for the next 5 tosses of the same globe. I recommend you use the sampling method.
 
 ```{r}
 # Sample 100 parameter values from posterior
@@ -60,7 +64,9 @@ ggplot() +
        y = "Count")
 ```
 
-## Problen 3: Use the posterior predictive distribution from 2 to calculate the probability of 3 or more water samples in the next 5 tosses.
+## Problem 3
+
+Use the posterior predictive distribution from 2 to calculate the probability of 3 or more water samples in the next 5 tosses.
 
 ```{r}
 # Find proportion of predictive samples that result in 3 or more water tosses in next 5 tosses:
