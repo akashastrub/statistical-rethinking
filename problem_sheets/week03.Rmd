@@ -1,0 +1,155 @@
+--- 
+title: "Week 3 Problem Sheet" 
+author: "Akasha Strub"
+date: "18 July 2023"
+output: html_document 
+---
+
+## Import libraries
+
+```{r, message = FALSE}
+# Import libraries
+library(rethinking)
+library(dplyr)
+library(ggplot2)
+library(dagitty)
+
+# Set seed
+set.seed(1807)
+```
+
+## Problem 1
+
+DAG: 
+
+```{r}
+# Draw DAG
+# F is avgfood, G is groupsize, A is area, and W is weight.
+dag <- dagitty( "dag {
+Area -> AverageFood
+AverageFood -> Weight
+AverageFood -> GroupSize
+GroupSize -> Weight
+}")
+
+coordinates(dag) <- list(
+  x = c(Weight = 1, AverageFood = 0, GroupSize = 2, Area = 1) , 
+  y = c(Weight = 2, AverageFood = 1, GroupSize = 1, Area = 0))
+
+drawdag(dag)
+```
+
+Use the backdoor criterion and estimate the total causal influence of A on
+F. What effect would increasing the area of a territory have on the amount
+of food inside it?
+
+```{r}
+# No backdoor criterion is required, as nothing else feeds into F. 
+# A simple bivariate regression will do.
+
+# Load data
+data(foxes)
+
+# Standardize data
+df1 <- foxes %>% 
+  mutate(avgfood_std = standardize(avgfood),
+         groupsize_std = standardize(groupsize),
+         area_std = standardize(area),
+         weight_std = standardize(weight))
+
+# Find association between area and average food
+model1 <- quap(
+  alist(
+    avgfood_std ~ dnorm(mu, sigma),
+    mu <- a + b*area_std,
+    a ~ dnorm( 0 , 1 ),
+    b ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df1)
+
+# Posterior marginal distributions
+precis(model1)
+```
+
+Looks like territory size has a strong effect on average food. The larger the
+territory, the larger the average food.
+
+## Problem 2
+
+Infer the total causal effect of adding food F to a territory on the weight
+W of foxes. Can you calculate the causal effect by simulating an intervention
+on food?
+
+```{r}
+# The total causal effect is a combination of the direct path and the indirect
+# path flowing from F to W. Therefore, this is once again a simple bivariate
+# regression problem.
+
+# Find association (total causal effect) between food and weight
+model2 <- quap(
+  alist(
+    weight_std ~ dnorm(mu, sigma),
+    mu <- a + b*avgfood_std,
+    a ~ dnorm( 0 , 1 ),
+    b ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df1)
+
+# Posterior marginal distributions
+precis(model2)
+```
+
+These results suggest that there is no effect from increasing average food on weight.
+
+## Problem 3
+
+Infer the direct causal effect of adding food F to a territory on the weight
+W of foxes. In light of your estimates from this problem and the previous
+one, what do you think is going on with these foxes?
+
+```{r}
+# To infer the DIRECT causal effect, we need to also include groupsize G in the
+# model, and thereby graduate model2 to a multivariate model.
+
+# Find CONDITIONAL association between weight and average food and groupsize
+model3 <- quap(
+  alist(
+    weight_std ~ dnorm(mu, sigma),
+    mu <- a + b_avgfood*avgfood_std + b_groupsize*groupsize_std,
+    a ~ dnorm( 0 , 1 ),
+    b_avgfood ~ dnorm( 0 , 1 ),
+    b_groupsize ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df1)
+
+# Posterior marginal distributions
+precis(model3)
+```
+One possible interpretation: 
+
+Conditional on a fixed group size, an increase in average food increases the weight of the foxes. This is intuitive as there is more food per fox, leading to an increase in weight. 
+
+Conditional on fixed average food, an increase in group size causes a decrease in the weight of the foxes. This is also intuitive as there is less food per fox, leading to a decrease in weight.
+
+These variables have an opposite effect on the output, weight. When assessing the total causal effect of average food on weight (`model2`), we saw no association. One possible interpretation is that the effect of these two variables balance out. Wherever there is more average food, there will be more foxes in a group. Essentially, the ecosystem is balanced such that food per fox is constant across groups. Let's check this our very quickly. 
+
+```{r}
+# Find CONDITIONAL association between weight and average food and groupsize
+model3b <- quap(
+  alist(
+    groupsize_std ~ dnorm(mu, sigma),
+    mu <- a + b_avgfood*avgfood_std,
+    a ~ dnorm( 0 , 1 ),
+    b_avgfood ~ dnorm( 0 , 1 ),
+    sigma ~ dexp( 1 )
+    ),
+  data = df1)
+
+# Posterior marginal distributions
+precis(model3b)
+```
+
+This looks to indeed be the case: As average food increases, so does the number of foxes in a group. Nature is balancing this all out.
